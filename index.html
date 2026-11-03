@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0f15">
+<title>持股回落網</title>
+<style>
+  /* Layout: holdings rail on the left, chart + peak-drawdown readout on the right; stacks to cards on narrow widths. */
+  :root {
+    --bg: #0a0f15;
+    --panel: #10171f;
+    --panel-2: #151e29;
+    --line: #1f2a37;
+    --fg: #e6ecf3;
+    --muted: #8593a5;
+    --faint: #4d5a6b;
+    --accent: #67b0ff;
+    --peak: #f2c25a;
+    --s0: #6fc3a6;
+    --s1: #e8c76a;
+    --s2: #f0924d;
+    --s3: #ee6464;
+    --cost: #c39bf0;
+    --sans: "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --num: Georgia, "Times New Roman", serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: var(--sans);
+    font-size: 14px;
+    padding-block: max(20px, env(safe-area-inset-top, 0px)) max(32px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1240px; margin-inline: auto; display: flex; flex-direction: column; gap: 20px; container-type: inline-size; }
+
+  .head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; color: var(--muted); margin: 0 0 6px; }
+  h1 { font-weight: 600; font-size: 26px; margin: 0; letter-spacing: .02em; text-wrap: balance; }
+  .take { margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.6; max-width: 62ch; }
+  .take b { color: var(--fg); font-weight: 600; }
+
+  .periods { display: flex; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; max-width: 100%; }
+  .periods::-webkit-scrollbar { display: none; }
+  .period { flex: 0 0 auto; scroll-snap-align: start; appearance: none; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; padding: 7px 16px; border-radius: 999px; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s; }
+  .period:hover { color: var(--fg); background: var(--panel-2); }
+  .period[aria-pressed="true"] { background: var(--accent); color: #06121f; font-weight: 600; }
+  .period:focus-visible, .hold:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .main > aside { min-width: 0; }
+  @container (min-width: 880px) { .main { grid-template-columns: 15.5rem minmax(0, 1fr); align-items: start; } }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  .rail-label { font-size: 12px; letter-spacing: .1em; color: var(--muted); margin: 0 0 8px; }
+  .holds { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; scrollbar-width: thin; }
+  @container (min-width: 880px) { .holds { flex-direction: column; overflow: visible; } }
+  .hold { flex: 0 0 auto; min-width: 9.5rem; scroll-snap-align: start; appearance: none; text-align: left; font: inherit; color: inherit; cursor: pointer; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; transition: border-color .15s, background .15s; }
+  .hold:hover { border-color: var(--faint); }
+  .hold[aria-pressed="true"] { background: var(--panel-2); border-color: var(--accent); }
+  .hold-name { font-size: 15px; font-weight: 600; }
+  .hold-dd { font-family: var(--num); font-size: 16px; font-variant-numeric: tabular-nums; text-align: right; }
+  .hold-sym, .hold-px { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hold-px { text-align: right; }
+  .hold-bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--line); margin-top: 6px; overflow: hidden; }
+  .hold-bar i { display: block; height: 100%; border-radius: 2px; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; min-width: 0; }
+  .card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
+  h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  h2 small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 8px; font-variant-numeric: tabular-nums; }
+  .note { margin: 0; font-size: 13px; color: var(--muted); }
+  .chart { position: relative; min-height: 320px; }
+  @container (max-width: 559px) { .chart { min-height: 240px; } }
+  .chart svg { display: block; overflow: visible; }
+  .tick-label { fill: var(--muted); font-size: 11px; font-family: var(--sans); font-variant-numeric: tabular-nums; }
+  .tip { position: absolute; pointer-events: none; background: #19232f; border: 1px solid var(--faint); border-radius: 8px; padding: 6px 10px; font-size: 12px; line-height: 1.5; white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,.45); font-variant-numeric: tabular-nums; }
+  .tip .d { color: var(--muted); }
+  .tip b { font-weight: 600; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 14px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  @container (max-width: 639px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats .stat-value { font-size: 22px; } }
+  .stat { background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .stat-label { font-size: 12px; color: var(--muted); letter-spacing: .06em; }
+  .stat-value { font-family: var(--num); font-size: 28px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .stat-value.peak { color: var(--peak); }
+  .stat-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; width: fit-content; }
+  .sev::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .ruler { margin-top: 14px; }
+  .ruler-track { height: 34px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 4px; border-radius: 2px; display: inline-block; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+  th { text-align: right; font-weight: 400; color: var(--muted); font-size: 12px; letter-spacing: .06em; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td, tbody tr.on td { background: var(--panel-2); }
+  tbody tr.on td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+  .sym { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  .ddcell { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+  .ddbar { width: 90px; height: 6px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; }
+  .ddbar i { position: absolute; right: 0; top: 0; bottom: 0; border-radius: 3px; }
+  @container (max-width: 639px) {
+    thead { display: none; }
+    table, tbody { display: block; }
+    tbody { display: grid; gap: 10px; }
+    tbody tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    tbody tr.on { border-color: var(--accent); }
+    td { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; border: 0; text-align: left; white-space: normal; background: none !important; box-shadow: none !important; }
+    td:first-child { grid-column: 1 / -1; flex-direction: row; align-items: baseline; font-size: 16px; font-weight: 600; }
+    td:last-child { grid-column: 1 / -1; }
+    td:not(:first-child)::before { font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+    td:nth-child(2)::before { content: "期間高點"; }
+    td:nth-child(3)::before { content: "高點日期"; }
+    td:nth-child(4)::before { content: "目前價格"; }
+    td:nth-child(5)::before { content: "回落幅度"; }
+    .ddcell { justify-content: flex-start; width: 100%; }
+    .ddbar { flex: 1; }
+  }
+
+  .since-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .date { background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; color-scheme: dark; }
+  .date:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .since-note { margin-bottom: 10px; }
+  .since-table td, .since-table th { padding-inline: 8px; }
+  .since-table .ddbar { width: 48px; }
+  @container (max-width: 1000px) { .since-table .ddbar { display: none; } }
+  .sub { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  @container (max-width: 639px) {
+    .since-table td:last-child { grid-column: auto; }
+    .since-table td:nth-child(2)::before { content: "起日收盤"; }
+    .since-table td:nth-child(3)::before { content: "起日以來高點"; }
+    .since-table td:nth-child(4)::before { content: "高點日期"; }
+    .since-table td:nth-child(5)::before { content: "目前價格"; }
+    .since-table td:nth-child(6)::before { content: "起日以來漲跌"; }
+    .since-table td:nth-child(7)::before { content: "自高點回落"; }
+  }
+
+  .cost-input { width: 5.5em; background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; }
+  .cost-input::placeholder { color: var(--faint); }
+  .cost-input:focus-visible { outline: 2px solid var(--cost); outline-offset: 1px; }
+  .cost-table td, .cost-table th { padding-inline: 8px; }
+  .pos { color: var(--s0); }
+  .neg { color: var(--s3); }
+  .costline { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .costline b { font-weight: 600; color: var(--fg); }
+  .costline .k { color: var(--cost); }
+  @container (max-width: 639px) {
+    .cost-table td:last-child { grid-column: auto; }
+    .cost-input { font-size: 16px; } /* 16px keeps iOS from zooming in on focus */
+    .cost-table td:nth-child(2)::before { content: "我的成本"; }
+    .cost-table td:nth-child(3)::before { content: "目前價格"; }
+    .cost-table td:nth-child(4)::before { content: "損益"; }
+    .cost-table td:nth-child(5)::before { content: "期間高點"; }
+    .cost-table td:nth-child(6)::before { content: "高點時報酬"; }
+    .cost-table td:nth-child(7)::before { content: "獲利回吐"; }
+  }
+
+  .foot { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 0; }
+  .status { padding: 40px 0; text-align: center; color: var(--muted); }
+  @media (prefers-reduced-motion: no-preference) {
+    .line-path { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); animation: draw .9s cubic-bezier(.2,.7,.2,1) forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div>
+      <p class="eyebrow">持股・高點回落追蹤</p>
+      <h1>持股回落網</h1>
+      <p class="take" id="take">以 <b id="t-period">—</b> 期間來看，回落最深的是 <b id="t-worst">—</b>（<b id="t-worst-dd">—</b>），最接近高點的是 <b id="t-best">—</b>（<b id="t-best-dd">—</b>）。</p>
+    </div>
+    <nav class="periods" aria-label="期間">
+      <button type="button" class="period" data-period="5d" aria-pressed="false">5 日</button>
+      <button type="button" class="period" data-period="20d" aria-pressed="true">20 日</button>
+      <button type="button" class="period" data-period="60d" aria-pressed="false">60 日</button>
+      <button type="button" class="period" data-period="120d" aria-pressed="false">120 日</button>
+      <button type="button" class="period" data-period="1y" aria-pressed="false">1 年</button>
+      <button type="button" class="period" data-period="all" aria-pressed="false">歷史</button>
+    </nav>
+  </header>
+
+  <p class="status" id="status">載入股價中…</p>
+
+  <div class="main" id="main" hidden>
+    <aside>
+      <p class="rail-label">我的持股・期間回落</p>
+      <div class="holds" id="picker" role="group" aria-label="選擇持股"></div>
+    </aside>
+
+    <div class="col">
+      <section class="card" id="chart-card">
+        <div class="card-head">
+          <h2><span id="c-name">—</span><small id="c-sym">—</small></h2>
+          <p class="note">還原收盤價・<span id="c-period">—</span>・黃色虛線為期間高點<span id="c-costnote" hidden>，紫色虛線為成本</span></p>
+        </div>
+        <div class="chart" id="chart"></div>
+        <div class="stats">
+          <div class="stat">
+            <span class="stat-label">期間最高價</span>
+            <span class="stat-value peak" id="s-high">—</span>
+            <span class="stat-sub">還原收盤價</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">高點日期</span>
+            <span class="stat-value" id="s-date">—</span>
+            <span class="stat-sub">高點後 <span id="s-days">—</span> 個交易日</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">目前價格</span>
+            <span class="stat-value" id="s-price">—</span>
+            <span class="stat-sub"><span id="s-pdate">—</span> 收盤</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">回落百分比</span>
+            <span class="stat-value" id="s-dd">—</span>
+            <span class="sev" id="s-sev">—</span>
+          </div>
+        </div>
+        <p class="costline" id="costline" hidden></p>
+        <div class="ruler">
+          <div class="ruler-track" id="ruler"></div>
+          <div class="legend">
+            <span><i style="background:var(--s0)"></i>0 – 5% 接近高點</span>
+            <span><i style="background:var(--s1)"></i>5 – 10% 小幅回檔</span>
+            <span><i style="background:var(--s2)"></i>10 – 20% 修正</span>
+            <span><i style="background:var(--s3)"></i>20% 以上 深度回落</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="overview">
+        <div class="card-head">
+          <h2>全部持股回落一覽</h2>
+          <p class="note"><span id="o-period">—</span>・依回落幅度排序，點一列看走勢</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>持股</th><th>期間高點</th><th>高點日期</th><th>目前價格</th><th>回落幅度</th></tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" id="cost">
+        <div class="card-head">
+          <h2>成本與回落</h2>
+          <p class="note"><span id="k-period">—</span>・成本只存在這台裝置的瀏覽器</p>
+        </div>
+        <p class="note since-note">輸入實際買進的平均成本（每股）。損益 = 目前價格 ÷ 成本 − 1；獲利回吐 = 期間高點以來吐回的獲利佔高點時獲利的比例。</p>
+        <div class="table-wrap">
+          <table class="cost-table">
+            <thead>
+              <tr><th>持股</th><th>我的成本</th><th>目前價格</th><th>損益</th><th>期間高點</th><th>高點時報酬</th><th>獲利回吐</th></tr>
+            </thead>
+            <tbody id="cost-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" id="since">
+        <div class="card-head">
+          <h2>從特定日迄今的回落</h2>
+          <label class="since-pick" for="since-date">起日 <input type="date" id="since-date" class="date"></label>
+        </div>
+        <p class="note since-note">從起日（遇假日取下一個交易日）到最新收盤，各持股的最高收盤價與目前回落幅度。點一列看走勢。</p>
+        <div class="table-wrap">
+          <table class="since-table">
+            <thead>
+              <tr><th>持股</th><th>起日收盤</th><th>起日以來高點</th><th>高點日期</th><th>目前價格</th><th>起日以來漲跌</th><th>自高點回落</th></tr>
+            </thead>
+            <tbody id="since-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <p class="foot">回落百分比 = 目前收盤價 ÷ 期間最高收盤價 − 1。N 日期間以交易日計，1 年為日曆一年。價格為還原除權息後的每日收盤價（Yahoo Finance），配息和分割不會被算成回落，較早的價格因此會低於當時的實際成交價。每個交易日收盤後由 GitHub Actions 自動更新，資料更新於 <span id="asof">—</span>。</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(() => {
+  const LABEL = {'5d': '5 日', '20d': '20 日', '60d': '60 日', '120d': '120 日', '1y': '1 年', all: '歷史'};
+  const DAYS = {'5d': 5, '20d': 20, '60d': 60, '120d': 120};
+  const SEV_NAME = ['接近高點', '小幅回檔', '修正', '深度回落'];
+  const SEV_COLOR = ['var(--s0)', 'var(--s1)', 'var(--s2)', 'var(--s3)'];
+  const sev = (dd) => (dd > -0.05 ? 0 : dd > -0.10 ? 1 : dd > -0.20 ? 2 : 3);
+  const fPx = d3.format(',.2~f');
+  const fPct = (v) => (Math.abs(v) < 0.00005 ? '0.0%' : d3.format('.1%')(v).replace('−', '-'));
+  const fDate = (d) => d.replaceAll('-', '/');
+  const $ = (id) => document.getElementById(id);
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+  };
+  const state = {period: store.get('hd-period') in LABEL ? store.get('hd-period') : '20d', sym: store.get('hd-sym')};
+  let holdings = [];
+
+  // Purchase costs per symbol, kept only in this browser.
+  const costs = (() => { try { return JSON.parse(store.get('hd-costs')) || {}; } catch { return {}; } })();
+  const costOf = (sym) => (costs[sym] > 0 ? costs[sym] : null);
+  const setCost = (sym, text) => {
+    const v = Number(String(text).replace(/,/g, '').trim());
+    if (text.trim() && v > 0) costs[sym] = v; else delete costs[sym];
+    store.set('hd-costs', JSON.stringify(costs));
+  };
+  const fSigned = (v) => (v > 0 ? '+' : '') + fPct(v);
+  // Profit given back since the period high, as a share of the profit held at the high.
+  const costInfo = (x) => {
+    const cost = costOf(x.symbol);
+    if (!cost) return null;
+    const giveback = x.high > cost ? (x.high - x.price) / (x.high - cost) : null;
+    return {cost, pl: x.price / cost - 1, atHigh: x.high / cost - 1, giveback, below: x.price < cost};
+  };
+  const givebackText = (k) => (k.giveback === null ? ['期間內未高於成本', ''] : k.below ? ['跌破成本', 'neg']
+    : [fPct(k.giveback), k.giveback < 0.25 ? 'pos' : k.giveback < 0.5 ? '' : 'neg']);
+
+  const windowOf = (series, period) => {
+    if (period === 'all') return series;
+    if (period === '1y') {
+      const last = series[series.length - 1].d;
+      const yearAgo = String(Number(last.slice(0, 4)) - 1) + last.slice(4);
+      return series.filter((p) => p.d > yearAgo);
+    }
+    return series.slice(-DAYS[period]);
+  };
+
+  const stats = (h, period) => {
+    const w = windowOf(h.series, period);
+    let hi = 0;
+    w.forEach((p, i) => { if (p.c >= w[hi].c) hi = i; });
+    const last = h.series[h.series.length - 1];
+    return {symbol: h.symbol, name: h.name, w, hiIdx: hi, high: w[hi].c, highDate: w[hi].d,
+      price: last.c, priceDate: last.d, drawdown: last.c / w[hi].c - 1, daysSince: w.length - 1 - hi};
+  };
+
+  const all = () => holdings.map((h) => stats(h, state.period));
+  const current = () => {
+    if (!holdings.some((h) => h.symbol === state.sym)) state.sym = holdings[0].symbol;
+    return stats(holdings.find((h) => h.symbol === state.sym), state.period);
+  };
+  const select = (sym) => { state.sym = sym; store.set('hd-sym', sym); render(); };
+
+  function renderText(rows, r) {
+    ['t-period', 'c-period', 'o-period', 'k-period'].forEach((id) => { $(id).textContent = LABEL[state.period]; });
+    const worst = rows.reduce((a, b) => (b.drawdown < a.drawdown ? b : a));
+    const best = rows.reduce((a, b) => (b.drawdown > a.drawdown ? b : a));
+    $('t-worst').textContent = worst.name; $('t-worst-dd').textContent = fPct(worst.drawdown);
+    $('t-best').textContent = best.name; $('t-best-dd').textContent = fPct(best.drawdown);
+    $('c-name').textContent = r.name; $('c-sym').textContent = r.symbol;
+    $('s-high').textContent = fPx(r.high);
+    $('s-date').textContent = fDate(r.highDate);
+    $('s-days').textContent = r.daysSince;
+    $('s-price').textContent = fPx(r.price);
+    $('s-pdate').textContent = fDate(r.priceDate);
+    const k = sev(r.drawdown);
+    $('s-dd').textContent = fPct(r.drawdown); $('s-dd').style.color = SEV_COLOR[k];
+    $('s-sev').textContent = SEV_NAME[k]; $('s-sev').style.color = SEV_COLOR[k];
+
+    const ci = costInfo(r), line = $('costline');
+    line.hidden = !ci; $('c-costnote').hidden = !ci;
+    if (ci) {
+      const [gb, gbClass] = givebackText(ci);
+      line.innerHTML = '<span class="k">成本 <b></b></span><span>損益 <b></b></span><span>高點時報酬 <b></b></span><span>獲利回吐 <b></b></span>';
+      const b = line.querySelectorAll('b');
+      b[0].textContent = fPx(ci.cost);
+      b[1].textContent = fSigned(ci.pl); b[1].className = ci.pl >= 0 ? 'pos' : 'neg';
+      b[2].textContent = fSigned(ci.atHigh);
+      b[3].textContent = gb; b[3].className = gbClass;
+    }
+  }
+
+  function renderCost(rows) {
+    const tb = $('cost-body');
+    if (tb.children.length !== rows.length || rows.some((x, i) => tb.children[i].dataset.sym !== x.symbol)) {
+      tb.replaceChildren(...rows.map((x) => {
+        const tr = document.createElement('tr');
+        tr.tabIndex = 0; tr.dataset.sym = x.symbol;
+        tr.innerHTML = '<td><span class="n"></span><span class="sym"></span></td><td><input class="cost-input" type="text" inputmode="decimal" autocomplete="off" placeholder="輸入成本"></td><td></td><td></td><td></td><td></td><td></td>';
+        tr.querySelector('.n').textContent = x.name;
+        tr.querySelector('.sym').textContent = x.symbol;
+        const inp = tr.querySelector('input');
+        inp.setAttribute('aria-label', `${x.name} 成本`);
+        inp.value = costOf(x.symbol) ?? '';
+        inp.addEventListener('click', (e) => e.stopPropagation());
+        inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); });
+        inp.addEventListener('input', () => { setCost(x.symbol, inp.value); render(); });
+        const pick = () => { select(x.symbol); $('chart-card').scrollIntoView({block: 'nearest', behavior: 'smooth'}); };
+        tr.addEventListener('click', pick);
+        tr.addEventListener('keydown', (e) => { if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pick(); } });
+        return tr;
+      }));
+    }
+    rows.forEach((x, i) => {
+      const tr = tb.children[i], td = tr.children, ci = costInfo(x);
+      tr.classList.toggle('on', x.symbol === state.sym);
+      td[2].textContent = fPx(x.price);
+      td[4].textContent = fPx(x.high);
+      [3, 5, 6].forEach((j) => { td[j].textContent = '—'; td[j].className = ''; });
+      if (!ci) return;
+      td[3].textContent = fSigned(ci.pl); td[3].className = ci.pl >= 0 ? 'pos' : 'neg';
+      td[5].textContent = fSigned(ci.atHigh);
+      const [gb, gbClass] = givebackText(ci);
+      td[6].textContent = gb; td[6].className = gbClass;
+    });
+  }
+
+  function renderPicker(rows, r) {
+    const el = $('picker');
+    el.replaceChildren(...rows.map((x) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'hold';
+      b.setAttribute('aria-pressed', String(x.symbol === r.symbol));
+      const c = SEV_COLOR[sev(x.drawdown)];
+      b.innerHTML = '<span class="hold-name"></span><span class="hold-dd"></span><span class="hold-sym"></span><span class="hold-px"></span><span class="hold-bar"><i></i></span>';
+      b.children[0].textContent = x.name;
+      b.children[1].textContent = fPct(x.drawdown); b.children[1].style.color = c;
+      b.children[2].textContent = x.symbol;
+      b.children[3].textContent = fPx(x.price);
+      const fill = b.querySelector('i');
+      fill.style.width = `${Math.min(100, (-x.drawdown / 0.3) * 100)}%`; fill.style.background = c;
+      b.addEventListener('click', () => select(x.symbol));
+      return b;
+    }));
+  }
+
+  function renderTable(rows, r) {
+    const tb = $('tbody');
+    tb.replaceChildren(...rows.slice().sort((a, b) => a.drawdown - b.drawdown).map((x) => {
+      const tr = document.createElement('tr');
+      tr.tabIndex = 0;
+      if (x.symbol === r.symbol) tr.className = 'on';
+      tr.innerHTML = '<td><span class="n"></span><span class="sym"></span></td><td></td><td></td><td></td><td><span class="ddcell"><span class="ddbar"><i></i></span><span class="v"></span></span></td>';
+      const td = tr.children;
+      td[0].querySelector('.n').textContent = x.name;
+      td[0].querySelector('.sym').textContent = x.symbol;
+      td[1].textContent = fPx(x.high);
+      td[2].textContent = fDate(x.highDate);
+      td[3].textContent = fPx(x.price);
+      const c = SEV_COLOR[sev(x.drawdown)];
+      const fill = td[4].querySelector('i');
+      fill.style.width = `${Math.min(100, (-x.drawdown / 0.3) * 100)}%`; fill.style.background = c;
+      const v = td[4].querySelector('.v'); v.textContent = fPct(x.drawdown); v.style.color = c;
+      const pick = () => { select(x.symbol); $('chart-card').scrollIntoView({block: 'nearest', behavior: 'smooth'}); };
+      tr.addEventListener('click', pick);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+      return tr;
+    }));
+  }
+
+  function renderRuler(r) {
+    const el = $('ruler');
+    el.replaceChildren();
+    const W = el.clientWidth || 600, H = 34;
+    const max = Math.max(0.3, Math.ceil(-r.drawdown * 10) / 10);
+    const x = d3.scaleLinear([0, max], [8, W - 8]);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('height', H).attr('viewBox', `0 0 ${W} ${H}`);
+    [[0, 0.05], [0.05, 0.10], [0.10, 0.20], [0.20, max]].forEach(([a, b], i) => {
+      svg.append('rect').attr('x', x(a)).attr('y', 8).attr('width', Math.max(0, x(b) - x(a) - 2)).attr('height', 6).attr('rx', 3)
+        .attr('fill', SEV_COLOR[i]).attr('opacity', 0.35);
+    });
+    const ticks = [0, 0.05, 0.10, 0.20, max];
+    ticks.forEach((t, i) => {
+      svg.append('text').attr('class', 'tick-label').attr('x', x(t)).attr('y', 30)
+        .attr('text-anchor', i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle')
+        .text(t === 0 ? '0%' : `-${Math.round(t * 100)}%`);
+    });
+    const c = SEV_COLOR[sev(r.drawdown)];
+    const cx = x(Math.min(max, -r.drawdown));
+    svg.append('rect').attr('x', 8).attr('y', 8).attr('width', Math.max(0, cx - 8)).attr('height', 6).attr('rx', 3).attr('fill', c);
+    svg.append('circle').attr('cx', cx).attr('cy', 11).attr('r', 6).attr('fill', 'var(--bg)').attr('stroke', c).attr('stroke-width', 2.5);
+  }
+
+  let animated = false;
+  function renderChart(r) {
+    const el = $('chart');
+    el.replaceChildren();
+    const s = r.w, n = s.length;
+    const W = Math.max(280, el.clientWidth);
+    const Ht = W < 560 ? 240 : 320;
+    let lo = d3.min(s, (d) => d.c), hi = d3.max(s, (d) => d.c);
+    // Bring the cost into view when it is near the price range; farther away it is only marked at the edge.
+    const cost = costOf(r.symbol), span = hi - lo || hi * 0.02;
+    const costIn = cost !== null && cost >= lo - span && cost <= hi + span;
+    if (costIn) { lo = Math.min(lo, cost); hi = Math.max(hi, cost); }
+    const pad = (hi - lo || hi * 0.02) * 0.12;
+    const y = d3.scaleLinear([lo - pad, hi + pad], [Ht - 26, 12]).nice(5);
+    const yt = y.ticks(W < 560 ? 4 : 5);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('height', Ht).attr('viewBox', `0 0 ${W} ${Ht}`);
+
+    const probe = svg.append('g');
+    let tw = 0;
+    yt.forEach((t) => { tw = Math.max(tw, probe.append('text').attr('class', 'tick-label').text(fPx(t)).node().getComputedTextLength()); });
+    probe.remove();
+    const m = {l: 4, r: tw + 14};
+    const x = d3.scaleLinear([0, Math.max(1, n - 1)], [m.l + 6, W - m.r - 6]);
+    const base = Ht - 26;
+
+    const g = svg.append('g');
+    yt.forEach((t) => {
+      g.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y(t)).attr('y2', y(t)).attr('stroke', 'var(--line)');
+      g.append('text').attr('class', 'tick-label').attr('x', W - m.r + 8).attr('y', y(t)).attr('dy', '0.32em').text(fPx(t));
+    });
+    const per = state.period;
+    const fmt = per === 'all' ? (d) => d.slice(0, 4) : per === '1y' ? (d) => d.slice(0, 7).replace('-', '/') : (d) => d.slice(5).replace('-', '/');
+    const nt = Math.min(n, W < 560 ? 4 : 6);
+    const idx = nt <= 1 ? [0] : d3.range(nt).map((i) => Math.round((i * (n - 1)) / (nt - 1)));
+    let lastLabel = null;
+    idx.forEach((i, k) => {
+      const lab = fmt(s[i].d);
+      if (lab === lastLabel) return;
+      lastLabel = lab;
+      g.append('text').attr('class', 'tick-label').attr('x', x(i)).attr('y', Ht - 6)
+        .attr('text-anchor', k === 0 ? 'start' : k === idx.length - 1 ? 'end' : 'middle').text(lab);
+    });
+
+    const yHi = y(r.high), yNow = y(r.price), c = SEV_COLOR[sev(r.drawdown)];
+    if (r.hiIdx < n - 1) {
+      svg.append('rect').attr('x', x(r.hiIdx)).attr('y', yHi).attr('width', x(n - 1) - x(r.hiIdx)).attr('height', Math.max(0, yNow - yHi))
+        .attr('fill', c).attr('opacity', 0.1);
+    }
+    const grad = svg.append('defs').append('linearGradient').attr('id', 'area-grad').attr('x1', 0).attr('x2', 0).attr('y1', 0).attr('y2', 1);
+    [[0, .26], [.25, .16], [.5, .08], [.75, .03], [1, 0]].forEach(([o, a]) => grad.append('stop').attr('offset', o).attr('style', `stop-color: var(--accent); stop-opacity: ${a}`));
+    svg.append('path').attr('fill', 'url(#area-grad)').attr('d', d3.area().x((d, i) => x(i)).y0(base).y1((d) => y(d.c))(s));
+    svg.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', yHi).attr('y2', yHi)
+      .attr('stroke', 'var(--peak)').attr('stroke-dasharray', '4 4').attr('opacity', .8);
+    const line = svg.append('path').attr('fill', 'none').attr('stroke', 'var(--accent)').attr('stroke-width', 2)
+      .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round')
+      .attr('d', d3.line().x((d, i) => x(i)).y((d) => y(d.c))(s));
+    if (!animated) { animated = true; line.attr('class', 'line-path').attr('style', `--len:${line.node().getTotalLength()}`); }
+
+    svg.append('circle').attr('cx', x(r.hiIdx)).attr('cy', yHi).attr('r', 5).attr('fill', 'var(--peak)').attr('stroke', 'var(--panel)').attr('stroke-width', 2);
+    const pl = svg.append('text').attr('class', 'tick-label').attr('y', yHi - 10).attr('font-size', 12).text(`高點 ${fPx(r.high)}`).style('fill', 'var(--peak)');
+    const plw = pl.node().getComputedTextLength();
+    pl.attr('x', Math.min(Math.max(m.l, x(r.hiIdx) - plw / 2), W - m.r - plw - 4));
+    if (yHi - 10 < 12) pl.attr('y', yHi + 18);
+    if (cost !== null) {
+      const above = cost > hi, yc = costIn ? y(cost) : above ? 14 : base - 4;
+      if (costIn) {
+        svg.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', yc).attr('y2', yc)
+          .attr('stroke', 'var(--cost)').attr('stroke-dasharray', '2 4').attr('stroke-width', 1.5);
+      }
+      const cl = svg.append('text').attr('class', 'tick-label').attr('x', m.l + 2).attr('font-size', 12).style('fill', 'var(--cost)')
+        .text(costIn ? `成本 ${fPx(cost)}` : `成本 ${fPx(cost)} ${above ? '↑' : '↓'}`);
+      cl.attr('y', costIn ? (yc - 6 < 12 ? yc + 16 : yc - 6) : yc - (above ? -4 : 4));
+    }
+    svg.append('circle').attr('cx', x(n - 1)).attr('cy', yNow).attr('r', 4.5).attr('fill', 'var(--accent)').attr('stroke', 'var(--panel)').attr('stroke-width', 2);
+
+    const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; el.append(tip);
+    const rule = svg.append('line').attr('y1', 12).attr('y2', base).attr('stroke', 'var(--faint)').attr('opacity', 0);
+    const dot = svg.append('circle').attr('r', 4).attr('fill', 'var(--accent)').attr('stroke', 'var(--fg)').attr('stroke-width', 1.5).attr('opacity', 0);
+    const move = (ev) => {
+      const [mx] = d3.pointer(ev, svg.node());
+      const i = Math.max(0, Math.min(n - 1, Math.round(x.invert(mx))));
+      const d = s[i];
+      rule.attr('x1', x(i)).attr('x2', x(i)).attr('opacity', 1);
+      dot.attr('cx', x(i)).attr('cy', y(d.c)).attr('opacity', 1);
+      tip.innerHTML = '<div class="d"></div><div>收盤 <b></b></div><div>距期間高點 <b></b></div>';
+      tip.children[0].textContent = fDate(d.d);
+      tip.children[1].querySelector('b').textContent = fPx(d.c);
+      tip.children[2].querySelector('b').textContent = fPct(d.c / r.high - 1);
+      if (cost !== null) {
+        const row = document.createElement('div'); row.textContent = '相對成本 ';
+        const b = document.createElement('b'); b.textContent = fSigned(d.c / cost - 1); row.append(b); tip.append(row);
+      }
+      tip.hidden = false;
+      const rect = el.getBoundingClientRect();
+      const px = (x(i) / W) * rect.width;
+      let left = px + 12;
+      if (left + tip.offsetWidth > rect.width) left = px - tip.offsetWidth - 12;
+      tip.style.left = `${Math.max(0, left)}px`;
+      tip.style.top = `${Math.max(0, (y(d.c) / Ht) * rect.height - 60)}px`;
+    };
+    svg.append('rect').attr('x', m.l).attr('y', 0).attr('width', W - m.l - m.r).attr('height', Ht).attr('fill', 'transparent')
+      .on('pointermove', move).on('pointerdown', move)
+      .on('pointerleave', () => { tip.hidden = true; rule.attr('opacity', 0); dot.attr('opacity', 0); });
+  }
+
+  function render() {
+    if (!holdings.length) return;
+    const rows = all(), r = current();
+    document.querySelectorAll('.period').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.period === state.period)));
+    renderText(rows, r);
+    renderPicker(rows, r);
+    renderChart(r);
+    renderRuler(r);
+    renderTable(rows, r);
+    renderCost(rows);
+    renderSince(r);
+  }
+
+  function renderSince(r) {
+    const inp = $('since-date');
+    if (!inp.value) inp.value = `${holdings[0].series[holdings[0].series.length - 1].d.slice(0, 4)}-01-01`;
+    const start = inp.value;
+    const list = holdings.map((h) => {
+      const s = h.series;
+      let i0 = s.findIndex((p) => p.d >= start);
+      if (i0 < 0) i0 = s.length - 1;
+      const w = s.slice(i0);
+      let hi = 0;
+      w.forEach((p, i) => { if (p.c >= w[hi].c) hi = i; });
+      const last = s[s.length - 1];
+      return {symbol: h.symbol, name: h.name, first: s[0].d, from: w[0], high: w[hi], last,
+        change: last.c / w[0].c - 1, drawdown: last.c / w[hi].c - 1};
+    }).sort((a, b) => a.drawdown - b.drawdown);
+
+    $('since-body').replaceChildren(...list.map((x) => {
+      const tr = document.createElement('tr');
+      tr.tabIndex = 0;
+      if (x.symbol === r.symbol) tr.className = 'on';
+      tr.innerHTML = '<td><span class="n"></span><span class="sym"></span></td><td><span class="v"></span><span class="sub"></span></td><td></td><td></td><td></td><td></td>'
+        + '<td><span class="ddcell"><span class="ddbar"><i></i></span><span class="v"></span></span></td>';
+      const td = tr.children;
+      td[0].querySelector('.n').textContent = x.name;
+      td[0].querySelector('.sym').textContent = x.symbol;
+      td[1].querySelector('.v').textContent = fPx(x.from.c);
+      td[1].querySelector('.sub').textContent = start < x.first ? `資料自 ${fDate(x.first)} 起` : fDate(x.from.d);
+      td[2].textContent = fPx(x.high.c);
+      td[3].textContent = fDate(x.high.d);
+      td[4].textContent = fPx(x.last.c);
+      td[5].textContent = (x.change > 0 ? '+' : '') + fPct(x.change);
+      const c = SEV_COLOR[sev(x.drawdown)];
+      const fill = td[6].querySelector('i');
+      fill.style.width = `${Math.min(100, (-x.drawdown / 0.3) * 100)}%`; fill.style.background = c;
+      const v = td[6].querySelector('.v'); v.textContent = fPct(x.drawdown); v.style.color = c;
+      const pick = () => { select(x.symbol); $('chart-card').scrollIntoView({block: 'nearest', behavior: 'smooth'}); };
+      tr.addEventListener('click', pick);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+      return tr;
+    }));
+  }
+  $('since-date').addEventListener('change', () => {
+    if (holdings.length) renderSince(current());
+    store.set('hd-since', $('since-date').value);
+  });
+  $('since-date').value = store.get('hd-since') || '';
+
+  document.querySelectorAll('.period').forEach((b) => b.addEventListener('click', () => {
+    state.period = b.dataset.period; store.set('hd-period', state.period); render();
+  }));
+  let lastW = 0;
+  new ResizeObserver(() => {
+    const w = $('chart').clientWidth;
+    if (w && Math.abs(w - lastW) > 4) { lastW = w; render(); }
+  }).observe(document.querySelector('.wrap'));
+
+  fetch(`data/prices.json?t=${Date.now()}`, {cache: 'no-store'})
+    .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+    .then((data) => {
+      holdings = data.holdings
+        .filter((h) => h.series && h.series.length)
+        .map((h) => ({symbol: h.symbol, name: h.name, series: h.series.map(([d, c]) => ({d, c}))}));
+      if (!holdings.length) throw new Error('沒有任何持股資料');
+      $('asof').textContent = data.updated.replace('T', ' ').replace(/-/g, '/').slice(0, 16);
+      $('status').hidden = true;
+      $('main').hidden = false;
+      render();
+    })
+    .catch((err) => { $('status').textContent = `股價資料載入失敗（${err.message}）。請確認 data/prices.json 已由 GitHub Actions 產生。`; });
+})();
+</script>
+</body>
+</html>
